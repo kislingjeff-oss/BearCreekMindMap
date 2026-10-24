@@ -1,0 +1,459 @@
+<title>Bear Creek Mind Map</title>
+<style>
+  /* Layout concept: a left-to-right collapsible tree — root at the far left,
+     each generation in its own fixed-width column, pannable/zoomable canvas. */
+  :root{
+    --bg:#F6F3EC; --fg:#262A24; --panel:#FFFFFF; --panel-border:#DDD6C6;
+    --muted:#6B6657; --accent:#B4863A; --accent-ink:#2E2412;
+    --node-fill:#2B3A32; --node-fill-root:#C9A24B; --node-text:#F2EEE2;
+    --node-text-root:#20160A; --node-detail:#C9D3CB; --link:#9FAE9F;
+    --ring:#B4863A;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#141815; --fg:#E9E4D6; --panel:#1B211C; --panel-border:#2D352E;
+      --muted:#9A9484; --accent:#D8B466; --accent-ink:#20160A;
+      --node-fill:#26332C; --node-text:#F0ECDE; --node-detail:#AEBBB1;
+      --link:#4A5A4F; --ring:#D8B466;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#141815; --fg:#E9E4D6; --panel:#1B211C; --panel-border:#2D352E;
+    --muted:#9A9484; --accent:#D8B466; --accent-ink:#20160A;
+    --node-fill:#26332C; --node-text:#F0ECDE; --node-detail:#AEBBB1;
+    --link:#4A5A4F; --ring:#D8B466;
+    color-scheme: dark;
+  }
+
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:"Source Sans 3",system-ui,sans-serif;overflow:hidden}
+
+  #app{display:flex;flex-direction:column;height:100%}
+
+  header{
+    display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+    padding:12px max(16px, env(safe-area-inset-left, 0px)) 12px max(16px, env(safe-area-inset-left, 0px));
+    padding-right:max(16px, env(safe-area-inset-right, 0px));
+    background:var(--panel);border-bottom:1px solid var(--panel-border);
+    position:relative; z-index:5;
+  }
+  h1{
+    font-family:"Fraunces",Georgia,serif;font-weight:600;font-size:17px;margin:0;
+    white-space:nowrap;letter-spacing:.2px;text-wrap:balance;
+  }
+  h1 small{display:block;font-family:inherit;font-weight:400;font-size:11px;color:var(--muted);letter-spacing:.4px;text-transform:uppercase}
+
+  #search{
+    flex:1 1 180px;min-width:0;background:var(--bg);border:1px solid var(--panel-border);
+    color:var(--fg);border-radius:8px;padding:8px 12px;font-size:14px;font-family:inherit;
+  }
+  #search:focus{outline:2px solid var(--ring);outline-offset:1px}
+  #search::placeholder{color:var(--muted)}
+
+  .controls{display:flex;gap:6px;flex-wrap:wrap}
+  button.ctl{
+    background:var(--bg);border:1px solid var(--panel-border);color:var(--fg);
+    border-radius:8px;padding:8px 12px;font-size:13px;font-family:inherit;cursor:pointer;
+    white-space:nowrap;
+  }
+  button.ctl:hover{border-color:var(--accent)}
+  button.ctl:focus-visible{outline:2px solid var(--ring);outline-offset:1px}
+
+  #canvas-wrap{flex:1;position:relative;overflow:hidden;background:var(--bg)}
+  #canvas-wrap:active{cursor:grabbing}
+  svg{width:100%;height:100%;display:block;cursor:grab}
+
+  .node-box{cursor:pointer}
+  .node-box rect{stroke-width:1.4px}
+  .node-box.leaf{cursor:default}
+  .node-box text{pointer-events:none;font-family:"Source Sans 3",system-ui,sans-serif}
+  .node-box .label{font-weight:700}
+  .node-box .detail{font-weight:400}
+  .node-box.dimmed{opacity:.16}
+  .node-box.match rect{stroke:var(--ring);stroke-width:3px}
+
+  .link{fill:none;stroke:var(--link);stroke-width:1.6px}
+  .link.dimmed{opacity:.1}
+
+  .chip{font-size:10px;font-weight:700;fill:var(--accent-ink)}
+
+  footer{
+    padding:8px max(16px, env(safe-area-inset-left, 0px)) max(8px, env(safe-area-inset-bottom, 0px));
+    padding-right:max(16px, env(safe-area-inset-right, 0px));
+    background:var(--panel);border-top:1px solid var(--panel-border);
+    font-size:12px;color:var(--muted);display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;
+  }
+</style>
+
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:wght@500;600;700&family=Source+Sans+3:wght@400;600;700&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js"></script>
+
+<div id="app">
+  <header>
+    <h1>Bear Creek<small>From Committee to Mutual Aid</small></h1>
+    <input id="search" type="text" placeholder="Search the map…" autocomplete="off">
+    <div class="controls">
+      <button class="ctl" id="expandAll">Expand all</button>
+      <button class="ctl" id="collapseAll">Collapse all</button>
+      <button class="ctl" id="fitView">Fit view</button>
+    </div>
+  </header>
+  <div id="canvas-wrap">
+    <svg id="svg">
+      <g id="viewport">
+        <g id="links"></g>
+        <g id="nodes"></g>
+      </g>
+    </svg>
+  </div>
+  <footer>
+    <span>Click a box to open or close its branch. Drag to pan, scroll or pinch to zoom.</span>
+    <span id="counter"></span>
+  </footer>
+</div>
+
+<script>
+(function(){
+
+// ---------- content, transcribed from the NotebookLM mind map ----------
+var DATA = {name:"Bear Creek Friends Meeting: From Committee to Mutual Aid", children:[
+  {name:"Preface and Core Proposal", children:[
+    {name:"Structural Strain: Inherited committee model built for co-presence under hybrid reality"},
+    {name:"Dual Reality: Overload on a few Friends vs. stagnation and untapped gifts among wider circle"},
+    {name:"Core Shift: Interest groups, mutual aid, and trust replacing standing committees and approval"},
+    {name:"Target Audience: All relational circles from First Day attenders to remote Zoom participants"},
+    {name:"Staged Roadmap: Gradual, tested, and reversible change without predetermined five-year plan"}
+  ]},
+  {name:"Spiritual Grounding", children:[
+    {name:"Testimony of Community: Spirit speaks to gathered body through shared listening"},
+    {name:"Testimony of Equality: Spiritual authority is not held exclusively by named officeholders"},
+    {name:"Testimony of Simplicity: Removal of procedural gatekeeping between leading and fruit"},
+    {name:"Testimony of Peace: Right relationship without coercive approval in reserve"},
+    {name:"Testimony of Integrity: Alignment between professed trust and actual structures"},
+    {name:"Waiting Worship: Model of trust tested through transparency rather than advance permission"},
+    {name:"Lived Precedent: Scattergood Friends School physical labor and communal accountability"}
+  ]},
+  {name:"Diagnosis of Inherited Strain", children:[
+    {name:"Unsustainable Overload", children:[
+      {name:"Jackie Leckband: Clerk, RE/Spiritual Enrichment, Funeral/Memorial, Hospitality"},
+      {name:"Osa Bricker: Treasurer and Trustee"},
+      {name:"Russ Leckband: House and Grounds, Ministry and Counsel, Trustee"},
+      {name:"Structural Gaps: Unfilled Assistant Clerk and Assistant Treasurer roles"}
+    ]},
+    {name:"Broken Assumptions", children:[
+      {name:"Assumption of Co-Presence: Hybrid reality of Zoom and in-person gatherings"},
+      {name:"Assumption of Scarcity of Trust: Gatekeeping compensating for thinner ambient accountability"},
+      {name:"Assumption of Permanence: Fixed committee overhead versus task-bound flexibility"}
+    ]}
+  ]},
+  {name:"Mutual Aid as Practice", children:[
+    {name:"Des Moines Mutual Aid: Food distribution without gatekeeping or means-testing"},
+    {name:"Reciprocity: Dissolving the line between giver and receiver"},
+    {name:"First Nation-Farmer Climate Unity March: Ninety-four miles building relationship"},
+    {name:"Great Plains Action Society: Urban Resilience Hub and Maiden Lane land sovereignty"},
+    {name:"Charity vs. Mutual Aid: Asymmetrical charity versus shared community circulation"}
+  ]},
+  {name:"The Interest Group Model", children:[
+    {name:"Core Mechanics", children:[
+      {name:"Task-Bound Naming: Named for activity rather than institutional office"},
+      {name:"Ephemeral Existence: Form when need arises, dissolve when complete"},
+      {name:"Horizontal Accountability: Report to whole meeting instead of hierarchical oversight"}
+    ]},
+    {name:"Existing Precedents", children:[
+      {name:"Peace and Social Concerns: Functioning without standing committee"},
+      {name:"Laughing Waters Worship Group: Virtual worship under care with single contact"},
+      {name:"Co-clerking Precedent: Shared clerking by Jeff Kisling and Jenny Cisar"}
+    ]},
+    {name:"Retained Continuity Roles", children:[
+      {name:"Clerk: Paired and shared with Assistant or Recording Clerk"},
+      {name:"Treasurer: Paired and shared with Assistant Treasurer"},
+      {name:"Recorder: Membership records and yearly meeting reporting"},
+      {name:"Trustees: Legal and fiduciary property responsibility"}
+    ]}
+  ]},
+  {name:"Replacing Approval with Trust", children:[
+    {name:"Transparency Over Gatekeeping: Act and report promptly to whole meeting"},
+    {name:"Gathered Discernment: Final testing of leadings in business meeting"},
+    {name:"Clearness Committees: Informal spiritual support for weighty leadings"},
+    {name:"Handling Honest Error: Loving correction through ordinary community process"}
+  ]},
+  {name:"Responsive Communication Network", children:[
+    {name:"Redundancy over Elegance: Multiple channels for remote and in-person Friends"},
+    {name:"Asynchronous Default: Shared living document of active interest groups"},
+    {name:"Urgent-Need Channel: Fast-response communication for time-sensitive crises"},
+    {name:"Non-Digital Inclusion: Phone trees and printed summaries for non-online members"}
+  ]},
+  {name:"Money and Mutual Aid", children:[
+    {name:"Delegated Spending: Modest threshold for interest group expenditures without Treasurer approval"},
+    {name:"Memorial Gifts: Shared circulation supporting ongoing mutual aid rather than sitting idle"},
+    {name:"Finance Interest Group: Stewardship, fast response, and transparent shared ledger"},
+    {name:"Digital Distribution: Same-day electronic fund movement for urgent needs"},
+    {name:"Standing Obligations: First-priority annual apportionment to Iowa Yearly Meeting"}
+  ]},
+  {name:"The Safe and Historical Archive", children:[
+    {name:"Newly Opened Safe: First proving ground for the interest-group model"},
+    {name:"Phase One: Photographing contents at the meetinghouse"},
+    {name:"Phase Two: Remote cataloguing from photographs"},
+    {name:"Phase Three: Selective transcription with Nancy Osborn Johnsen"},
+    {name:"Phase Four: Preserving physical records and oral history"}
+  ]},
+  {name:"Survival and Resilience", children:[
+    {name:"Realistic Orientation: Facing environmental, economic, and social strain in rural Iowa"},
+    {name:"Water Resilience: Well water testing and filtration assessment"},
+    {name:"Food Resilience: Seed-saving, skill-sharing, and pantry coordination"},
+    {name:"Medicine Resilience: Elder medication continuity planning and first-aid training"},
+    {name:"Energy Resilience: Backup power for hybrid meeting technology and solar feasibility"}
+  ]},
+  {name:"Keeping Faith with the Larger Body", children:[
+    {name:"Unchanged Obligations: Representatives, Caretakers, apportionments, and sessions"},
+    {name:"State of the Meeting Report: Supported by wider input from remote interest groups"},
+    {name:"Transparent Communication: Honest sharing of structural transition with IYM(C)"},
+    {name:"Interim Meeting: Ongoing informal dialogue between monthly meetings"}
+  ]},
+  {name:"Implementation Roadmap", children:[
+    {name:"Phase Zero: Assistant roles, survey circulation, and archive pilot"},
+    {name:"Phase One: Naming the interest-group model in business meeting"},
+    {name:"Phase Two: Establishing finance mechanism and spending threshold"},
+    {name:"Phase Three: Launching resilience interest groups"},
+    {name:"Phase Four: Communicating transition to Iowa Yearly Meeting"},
+    {name:"Phase Five: Sharing experience with other small meetings"}
+  ]},
+  {name:"New Appendices — October 24, 2026", children:[
+    {name:"Appendix R: Why This Isn't Abstract — Jeff's own funding request rejected on the spot, read against the meeting's fast approval of a funding request tied to Minnesota Friends' ICE-related community support; Jon Tesdell's parallel Hub experience"},
+    {name:"Appendix S: Laughing Waters Worship Group — a second place the same single-point-of-contact structural gap shows up, and how an interest group would help"},
+    {name:"Appendix T: What Adoption Would Look Like — two concrete pictures of interest groups in practice: supporting Hub work, and supporting Minnesota Friends' ICE-related work with bounded transparency"}
+  ]}
+]};
+
+var BRANCH_COLORS = ["#B07D4F","#7A6CA8","#B5555C","#4C8C6B","#3E7C8C","#C2995A",
+                      "#5B7FA6","#8C8C4C","#8C6F9E","#5C9E6F","#9E6B5C","#5C8C9E"];
+
+var COL_WIDTH = [210, 240, 260, 280];
+var PAD_X = 14, PAD_Y = 10, LINE_H_LABEL = 17, LINE_H_DETAIL = 15, GAP_LABEL_DETAIL = 3;
+var GAP_X = 64, GAP_Y = 12;
+var ROOT_H = 50;
+
+// ---------- offscreen measuring ----------
+var measureCanvas = document.createElement("canvas");
+var mctx = measureCanvas.getContext("2d");
+function wrap(text, font, maxWidth){
+  mctx.font = font;
+  var words = text.split(" "), lines = [], line = "";
+  for (var i=0;i<words.length;i++){
+    var test = line ? line + " " + words[i] : words[i];
+    if (mctx.measureText(test).width > maxWidth && line){
+      lines.push(line); line = words[i];
+    } else { line = test; }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+// ---------- build node objects ----------
+var idSeq = 0;
+function prep(raw, depth, parent, branchIdx){
+  var n = {
+    id: idSeq++, depth: depth, parent: parent,
+    expanded: depth === 0, // root starts open; everything else starts closed
+    branch: branchIdx
+  };
+  var colon = raw.name.indexOf(": ");
+  if (colon > -1){ n.label = raw.name.slice(0, colon); n.detail = raw.name.slice(colon+2); }
+  else { n.label = raw.name; n.detail = null; }
+
+  var w = COL_WIDTH[Math.min(depth, COL_WIDTH.length-1)];
+  var innerW = w - PAD_X*2;
+  var labelFont = (depth===0 ? "700 15px" : "700 13px") + " 'Source Sans 3', system-ui, sans-serif";
+  var detailFont = "400 12.5px 'Source Sans 3', system-ui, sans-serif";
+  n.labelLines = wrap(n.label, labelFont, innerW);
+  n.detailLines = n.detail ? wrap(n.detail, detailFont, innerW) : [];
+  n.w = w;
+  n.h = depth===0 ? ROOT_H :
+    PAD_Y*2 + n.labelLines.length*LINE_H_LABEL +
+    (n.detailLines.length ? GAP_LABEL_DETAIL + n.detailLines.length*LINE_H_DETAIL : 0);
+
+  n.children = (raw.children||[]).map(function(c, i){
+    return prep(c, depth+1, n, depth===0 ? i : branchIdx);
+  });
+  n.hasKids = n.children.length > 0;
+  return n;
+}
+var root = prep(DATA, 0, null, -1);
+
+// ---------- layout: only currently-expanded nodes get positioned ----------
+var colX = [0];
+for (var d=1; d<6; d++) colX[d] = colX[d-1] + COL_WIDTH[Math.min(d-1,COL_WIDTH.length-1)] + GAP_X;
+
+var visible = [];
+function layout(n, y0){
+  n.x = colX[n.depth];
+  visible.push(n);
+  if (n.hasKids && n.expanded){
+    var y = y0;
+    n.children.forEach(function(c){ y = layout(c, y); });
+    var first = n.children[0], last = n.children[n.children.length-1];
+    n.y = (first.y + last.y) / 2;
+    return Math.max(y, n.y + n.h/2 + GAP_Y);
+  } else {
+    n.y = y0 + n.h/2;
+    return y0 + n.h + GAP_Y;
+  }
+}
+
+var svg = d3.select("#svg");
+var viewport = d3.select("#viewport");
+var linksG = d3.select("#links");
+var nodesG = d3.select("#nodes");
+
+var zoom = d3.zoom().scaleExtent([0.18, 2.5]).on("zoom", function(ev){
+  viewport.attr("transform", ev.transform);
+});
+svg.call(zoom);
+
+function allDescendants(n){
+  var out = [n];
+  n.children.forEach(function(c){ out = out.concat(allDescendants(c)); });
+  return out;
+}
+var ALL_NODES = allDescendants(root);
+
+function render(fit){
+  visible = [];
+  layout(root, 0);
+
+  var query = document.getElementById("search").value.trim().toLowerCase();
+  var matchedIds = null;
+  if (query){
+    matchedIds = {};
+    ALL_NODES.forEach(function(n){
+      var hay = (n.label + " " + (n.detail||"")).toLowerCase();
+      if (hay.indexOf(query) > -1){
+        var p = n;
+        while(p){ p.expanded = p.hasKids ? true : p.expanded; matchedIds[p.id] = true; p = p.parent; }
+      }
+    });
+    // re-layout now that matches forced some nodes open
+    visible = []; layout(root, 0);
+  }
+
+  // links
+  var linkData = [];
+  visible.forEach(function(n){
+    if (n.expanded) n.children.forEach(function(c){ linkData.push({source:n, target:c}); });
+  });
+
+  var linkSel = linksG.selectAll("path.link").data(linkData, function(d){ return d.target.id; });
+  linkSel.exit().remove();
+  linkSel.enter().append("path").attr("class","link")
+    .merge(linkSel)
+    .classed("dimmed", function(d){ return matchedIds && !(matchedIds[d.source.id] && matchedIds[d.target.id]); })
+    .attr("d", function(d){
+      var x0 = d.source.x + d.source.w, y0 = d.source.y;
+      var x1 = d.target.x, y1 = d.target.y;
+      var mx = (x0+x1)/2;
+      return "M"+x0+","+y0+" C"+mx+","+y0+" "+mx+","+y1+" "+x1+","+y1;
+    });
+
+  // nodes
+  var nodeSel = nodesG.selectAll("g.node-box").data(visible, function(d){ return d.id; });
+  nodeSel.exit().remove();
+  var enter = nodeSel.enter().append("g").attr("class","node-box");
+  enter.append("rect");
+  enter.append("g").attr("class","text-wrap");
+  enter.append("text").attr("class","chevron");
+
+  var merged = enter.merge(nodeSel);
+  merged
+    .classed("leaf", function(d){ return !d.hasKids; })
+    .classed("dimmed", function(d){ return matchedIds && !matchedIds[d.id]; })
+    .classed("match", function(d){ return matchedIds && matchedIds[d.id] && d.detail && (d.label+" "+d.detail).toLowerCase().indexOf(query)>-1; })
+    .attr("transform", function(d){ return "translate("+d.x+","+(d.y - d.h/2)+")"; })
+    .style("cursor", function(d){ return d.hasKids ? "pointer" : "default"; })
+    .on("click", function(ev,d){
+      if (!d.hasKids) return;
+      d.expanded = !d.expanded;
+      render(true);
+    });
+
+  merged.select("rect")
+    .attr("width", function(d){ return d.w; })
+    .attr("height", function(d){ return d.h; })
+    .attr("rx", function(d){ return d.depth===0 ? 12 : 9; })
+    .attr("fill", function(d){ return d.depth===0 ? "var(--node-fill-root)" : "var(--node-fill)"; })
+    .attr("stroke", function(d){
+      if (d.depth===0) return "var(--node-fill-root)";
+      var idx = d.branch>=0 ? d.branch % BRANCH_COLORS.length : 0;
+      return BRANCH_COLORS[idx];
+    });
+
+  merged.select("g.text-wrap").each(function(d){
+    var g = d3.select(this);
+    g.selectAll("*").remove();
+    var textColor = d.depth===0 ? "var(--node-text-root)" : "var(--node-text)";
+    var detailColor = d.depth===0 ? "var(--node-text-root)" : "var(--node-detail)";
+    var ty = PAD_Y + LINE_H_LABEL*0.78;
+    d.labelLines.forEach(function(line, i){
+      g.append("text").attr("class","label").attr("x", PAD_X).attr("y", ty + i*LINE_H_LABEL)
+        .attr("fill", textColor).attr("font-size", d.depth===0?15:13).text(line);
+    });
+    var afterLabel = PAD_Y + d.labelLines.length*LINE_H_LABEL;
+    if (d.detailLines.length){
+      var dy0 = afterLabel + GAP_LABEL_DETAIL + LINE_H_DETAIL*0.75;
+      d.detailLines.forEach(function(line, i){
+        g.append("text").attr("class","detail").attr("x", PAD_X).attr("y", dy0 + i*LINE_H_DETAIL)
+          .attr("fill", detailColor).attr("font-size", 12.5).text(line);
+      });
+    }
+  });
+
+  merged.select("text.chevron")
+    .attr("x", function(d){ return d.w - 18; })
+    .attr("y", function(d){ return d.h/2 + 5; })
+    .attr("fill", function(d){ return d.depth===0 ? "var(--node-text-root)" : "var(--node-detail)"; })
+    .attr("font-size", 13)
+    .attr("text-anchor","middle")
+    .text(function(d){ return d.hasKids ? (d.expanded ? "–" : "+"+d.children.length) : ""; });
+
+  var total = ALL_NODES.length, shown = visible.length;
+  document.getElementById("counter").textContent = shown + " of " + total + " ideas shown";
+
+  if (fit) fitView();
+}
+
+function fitView(){
+  if (!visible.length) return;
+  var minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  visible.forEach(function(n){
+    minX = Math.min(minX, n.x); maxX = Math.max(maxX, n.x + n.w);
+    minY = Math.min(minY, n.y - n.h/2); maxY = Math.max(maxY, n.y + n.h/2);
+  });
+  var pad = 48;
+  var cw = document.getElementById("canvas-wrap").clientWidth;
+  var ch = document.getElementById("canvas-wrap").clientHeight;
+  var w = (maxX-minX) + pad*2, h = (maxY-minY) + pad*2;
+  var scale = Math.min(cw/w, ch/h, 1.1);
+  scale = Math.max(scale, 0.18);
+  var tx = -((minX-pad) * scale) + (cw - w*scale)/2;
+  var ty = -((minY-pad) * scale) + (ch - h*scale)/2;
+  svg.transition().duration(500).call(zoom.transform, d3.zoomIdentity.translate(tx,ty).scale(scale));
+}
+
+function setAll(expand){
+  ALL_NODES.forEach(function(n){ if (n.hasKids) n.expanded = expand; });
+  root.expanded = true;
+  render(true);
+}
+
+document.getElementById("expandAll").addEventListener("click", function(){ setAll(true); });
+document.getElementById("collapseAll").addEventListener("click", function(){ setAll(false); });
+document.getElementById("fitView").addEventListener("click", function(){ fitView(); });
+document.getElementById("search").addEventListener("input", function(){ render(true); });
+
+render(true);
+
+window.addEventListener("resize", function(){ fitView(); });
+
+})();
+</script>
